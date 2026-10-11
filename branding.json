@@ -5,5 +5,7 @@
   "company": "CloudPC",
   "domain": "cloudpc.local",
   "description": "CloudPC Stream",
-  "exe_name": "CloudPCStream.exe"
+  "exe_name": "CloudPCStream.exe",
+  "mac_app_name": "CloudPC Stream.app",
+  "bundle_id": "id.cloudpc.stream"
 }

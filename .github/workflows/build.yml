@@ -1,0 +1,203 @@
+# Build CloudPC Stream (moonlight-qt yang diganti mereknya) untuk Windows x64 dan macOS (universal: Intel + Apple Silicon).
+# Langkah build Qt disalin dari workflow resmi upstream (.github/workflows/build-win-mac.yml di tag yang sama);
+# kalau upstream_tag di branding.json dinaikkan, samakan versi Qt dan aqtsource dengan workflow upstream tag itu.
+# Hasil: satu GitHub Release berisi zip Windows, dmg macOS, dan zip source lengkap (kewajiban GPLv3).
+name: Build CloudPC Stream
+
+on:
+  workflow_dispatch:
+  push:
+    tags: ['cloudpc-*']
+
+permissions:
+  contents: write
+
+env:
+  AQT_SOURCE: 'git+https://github.com/miurahr/aqtinstall.git@073e34d7c2ab4ae6961ed7cca690b3abd5ba5a7e'
+
+jobs:
+  meta:
+    runs-on: ubuntu-latest
+    outputs:
+      tag: ${{ steps.brand.outputs.tag }}
+      release: ${{ steps.brand.outputs.release }}
+    steps:
+      - uses: actions/checkout@v5
+      - id: brand
+        run: |
+          tag=$(python3 -c "import json; print(json.load(open('branding.json'))['upstream_tag'])")
+          if [ "${{ github.ref_type }}" = "tag" ]; then rel="${{ github.ref_name }}"; else rel="cloudpc-$tag-r${{ github.run_number }}"; fi
+          echo "tag=$tag" >> "$GITHUB_OUTPUT"
+          echo "release=$rel" >> "$GITHUB_OUTPUT"
+
+  windows:
+    needs: meta
+    runs-on: windows-2025
+    env:
+      QT_VERSION: 6.12.0
+    steps:
+      - name: Ambil repo branding
+        uses: actions/checkout@v5
+        with:
+          path: branding
+
+      - name: Ambil source moonlight-qt ${{ needs.meta.outputs.tag }}
+        uses: actions/checkout@v5
+        with:
+          repository: moonlight-stream/moonlight-qt
+          ref: ${{ needs.meta.outputs.tag }}
+          path: src
+          submodules: recursive
+          fetch-depth: 1
+
+      - name: Ganti merek
+        run: python branding/apply_branding.py src
+
+      - name: Arsip source (GPL)
+        shell: pwsh
+        run: |
+          $name = "CloudPCStream-src-${{ needs.meta.outputs.tag }}"
+          New-Item -ItemType Directory -Force out, "stage\$name" | Out-Null
+          robocopy src "stage\$name\moonlight-qt" /E /XD .git /XF .git /NFL /NDL /NJH /NJS
+          if ($LASTEXITCODE -ge 8) { throw "robocopy src gagal ($LASTEXITCODE)" }
+          robocopy branding "stage\$name\cloudpc-branding" /E /XD .git /XF .git /NFL /NDL /NJH /NJS
+          if ($LASTEXITCODE -ge 8) { throw "robocopy branding gagal ($LASTEXITCODE)" }
+          7z a "out\$name.zip" ".\stage\$name" | Out-Null
+          if ($LASTEXITCODE -ne 0) { throw "7z gagal" }
+          exit 0
+
+      - name: Unduh dependensi
+        working-directory: src
+        run: powershell ./setup-deps.ps1
+
+      - name: Pasang Qt
+        uses: jurplel/install-qt-action@v4
+        with:
+          cache: true
+          set-env: true
+          add-tools-to-path: true
+          tools: tools_qtcreator_gui
+          version: ${{ env.QT_VERSION }}
+          aqtsource: ${{ env.AQT_SOURCE }}
+
+      - name: Build x64
+        working-directory: src
+        shell: cmd
+        env:
+          QT_PATH: ${{ runner.workspace }}\Qt\${{ env.QT_VERSION }}\msvc2022_64\bin
+        run: |
+          set "PATH=%QT_PATH%;%PATH%"
+          scripts\build-arch.bat Release x64
+
+      - name: Paketkan
+        shell: pwsh
+        run: |
+          $b = Get-Content branding/branding.json -Raw | ConvertFrom-Json
+          $deploy = 'src\build\deploy-x64-release'
+          Rename-Item "$deploy\Moonlight.exe" $b.exe_name
+          Copy-Item src\LICENSE "$deploy\LICENSE.txt"
+          Copy-Item src\CLOUDPC_MODIFICATIONS.txt $deploy
+          @(
+            'Aplikasi ini perangkat lunak bebas berlisensi GNU GPL versi 3 (LICENSE.txt), berbasis Moonlight.'
+            'Source code lengkap versi ini (termasuk skrip build dan perubahan merek):'
+            '${{ github.server_url }}/${{ github.repository }}/releases/tag/${{ needs.meta.outputs.release }}'
+          ) | Set-Content "$deploy\SOURCE.txt" -Encoding UTF8
+          7z a 'out\CloudPCStream-x64-${{ needs.meta.outputs.tag }}.zip' ".\$deploy\*" | Out-Null
+          if ($LASTEXITCODE -ne 0) { throw "7z gagal" }
+
+      - uses: actions/upload-artifact@v6
+        with:
+          name: windows
+          path: out/*.zip
+          if-no-files-found: error
+
+  macos:
+    needs: meta
+    runs-on: macos-26
+    env:
+      QT_VERSION: 6.11.2
+    steps:
+      - name: Ambil repo branding
+        uses: actions/checkout@v5
+        with:
+          path: branding
+
+      - name: Ambil source moonlight-qt ${{ needs.meta.outputs.tag }}
+        uses: actions/checkout@v5
+        with:
+          repository: moonlight-stream/moonlight-qt
+          ref: ${{ needs.meta.outputs.tag }}
+          path: src
+          submodules: recursive
+          fetch-depth: 1
+
+      - name: Ganti merek
+        run: python3 branding/apply_branding.py src
+
+      - name: Pasang Qt
+        uses: jurplel/install-qt-action@v4
+        with:
+          cache: true
+          set-env: true
+          add-tools-to-path: true
+          version: ${{ env.QT_VERSION }}
+          aqtsource: ${{ env.AQT_SOURCE }}
+
+      # Sama dengan scripts/generate-dmg.sh upstream sampai macdeployqt (tanpa tanda tangan developer dan tanpa
+      # create-dmg); dmg dibuat sendiri dengan hdiutil.
+      - name: Build universal (x86_64 + arm64)
+        working-directory: src
+        run: |
+          set -euo pipefail
+          python3 setup-deps.py
+          mkdir -p build/build-Release
+          cd build/build-Release
+          qmake ../../moonlight-qt.pro QMAKE_APPLE_DEVICE_ARCHS="x86_64 arm64"
+          make -j"$(sysctl -n hw.logicalcpu)" release
+          macdeployqt app/Moonlight.app -qmldir=../../app/gui -appstore-compliant
+          find app/Moonlight.app -name '*.dSYM' -prune -exec rm -rf {} +
+
+      - name: Paketkan
+        run: |
+          set -euo pipefail
+          name=$(python3 -c "import json; print(json.load(open('branding/branding.json'))['mac_app_name'])")
+          mkdir -p out stage
+          app="stage/$name"
+          mv src/build/build-Release/app/Moonlight.app "$app"
+          cp src/LICENSE "$app/Contents/Resources/LICENSE.txt"
+          cp src/CLOUDPC_MODIFICATIONS.txt "$app/Contents/Resources/"
+          printf '%s\n' \
+            'Aplikasi ini perangkat lunak bebas berlisensi GNU GPL versi 3 (LICENSE.txt), berbasis Moonlight.' \
+            'Source code lengkap versi ini (termasuk skrip build dan perubahan merek):' \
+            '${{ github.server_url }}/${{ github.repository }}/releases/tag/${{ needs.meta.outputs.release }}' \
+            > "$app/Contents/Resources/SOURCE.txt"
+          # Tanpa sertifikat Apple: tanda tangan ad-hoc (wajib agar jalan di Apple Silicon setelah bundel diubah).
+          codesign --force --deep --sign - "$app"
+          codesign --verify --deep --strict "$app"
+          lipo -archs "$app/Contents/MacOS/Moonlight"
+          # Nama tetap tanpa versi, supaya bisa diunduh lewat .../releases/latest/download/CloudPCStream-macOS.dmg
+          hdiutil create -volname "CloudPC Stream" -srcfolder "$app" -ov -format UDZO out/CloudPCStream-macOS.dmg
+
+      - uses: actions/upload-artifact@v6
+        with:
+          name: macos
+          path: out/*.dmg
+          compression-level: 0
+          if-no-files-found: error
+
+  release:
+    needs: [meta, windows, macos]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v6
+        with:
+          path: out
+          merge-multiple: true
+      - name: Buat GitHub Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          ls -la out
+          gh release create '${{ needs.meta.outputs.release }}' out/* \
+            --repo '${{ github.repository }}' --title 'CloudPC Stream ${{ needs.meta.outputs.release }}' \
+            --notes 'Berbasis moonlight-qt ${{ needs.meta.outputs.tag }} (GPLv3). Zip src = source lengkap untuk build ini. Windows x64 (zip) dan macOS universal (dmg, belum di-notarize Apple).'

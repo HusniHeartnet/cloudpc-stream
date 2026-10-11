@@ -44,10 +44,21 @@ REPLACEMENTS = [
     ("app/app.pro", "QMAKE_TARGET_PRODUCT = Moonlight", "QMAKE_TARGET_PRODUCT = {product}"),
     ("app/gui/main.qml", "AutoUpdateChecker.start()",
      "// AutoUpdateChecker.start() -- dimatikan di build {product}: pembaruan dikirim lewat aplikasi {product}"),
+    # macOS: ID bundel sendiri (pengaturan/izin terpisah dari Moonlight resmi) dan teks izin jaringan lokal.
+    ("app/Info.plist", "<string>com.moonlight-stream.Moonlight</string>", "<string>{bundle_id}</string>"),
+    ("app/Info.plist", "<string>Moonlight uses the local network", "<string>{product} uses the local network"),
+]
+
+# Pola regex (spasi/baris baru di antaranya bisa berbeda): nama yang tampil di Dock, Finder, dan menu bar macOS.
+REGEX_REPLACEMENTS = [
+    ("app/Info.plist", r"<key>CFBundleDisplayName</key>(\s*)<string>Moonlight</string>",
+     r"<key>CFBundleDisplayName</key>\1<string>{description}</string>\1"
+     r"<key>CFBundleName</key>\1<string>{description}</string>"),
 ]
 
 # Ikon: file upstream ditimpa dengan nama yang sama supaya .pro/.qrc tidak perlu diubah.
-ICONS = [("assets/icon.ico", "app/moonlight.ico"), ("assets/icon.svg", "app/res/moonlight.svg")]
+ICONS = [("assets/icon.ico", "app/moonlight.ico"), ("assets/icon.svg", "app/res/moonlight.svg"),
+         ("assets/icon.icns", "app/moonlight.icns")]
 
 # Teks terjemahan yang terlihat user: qsTr("...") di QML dan tr("...") di C++.
 _TR = {".qml": re.compile(r'(qsTr\(")((?:[^"\\]|\\.)*)"'), ".cpp": re.compile(r'(\btr\(")((?:[^"\\]|\\.)*)"')}
@@ -73,6 +84,14 @@ def apply(src: Path, brand: dict) -> list[str]:
                              "Upstream berubah; sesuaikan REPLACEMENTS di apply_branding.py.")
         _write(path, text.replace(old, new.format(**brand)))
         log.append(f"{rel}: {old.strip()[:60]}")
+    for rel, pattern, repl in REGEX_REPLACEMENTS:
+        path = src / rel
+        text, n = re.subn(pattern, repl.format(**brand), _read(path))
+        if not n:
+            raise SystemExit(f"GAGAL: pola tidak ditemukan di {rel}:\n  {pattern}\n"
+                             "Upstream berubah; sesuaikan REGEX_REPLACEMENTS di apply_branding.py.")
+        _write(path, text)
+        log.append(f"{rel}: {pattern[:60]}")
 
     # Teks "Moonlight" yang terlihat user (hanya isi qsTr/tr, bukan log, nama tipe, import, atau komentar).
     total = 0

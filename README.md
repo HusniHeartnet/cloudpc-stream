@@ -10,8 +10,13 @@ Repo publik itu sekaligus memenuhi kewajiban GPLv3: setiap rilis menyertakan zip
 |---|---|
 | `branding.json` | Nama produk, perusahaan, nama `.exe`, dan versi upstream (`upstream_tag`) |
 | `apply_branding.py` | Mengganti merek di source upstream; berhenti dengan error kalau ada pola yang tidak ketemu |
-| `assets/icon.ico`, `assets/icon.svg` | Ikon (sementara; ganti dengan logo asli, nama file tetap sama) |
-| `.github/workflows/build-windows.yml` | Build Windows x64 di GitHub Actions, lalu membuat GitHub Release |
+| `assets/icon.ico`, `.svg`, `.icns` | Ikon Windows/UI/macOS (sementara; ganti dengan logo asli, nama file tetap sama) |
+| `.github/workflows/build.yml` | Build Windows x64 dan macOS universal di GitHub Actions, lalu satu GitHub Release |
+
+Rilis berisi `CloudPCStream-x64-<versi>.zip` (Windows), `CloudPCStream-macOS.dmg` (macOS, nama tetap supaya
+`client/build-mac.sh` bisa mengunduh versi terbaru lewat `releases/latest/download/...`), dan zip source.
+Versi macOS hanya ditandatangani ad-hoc (belum di-notarize Apple): kalau dibuka langsung dari unduhan browser,
+macOS memblokirnya; lewat `build-mac.sh` (diunduh dengan curl dan dibundel di CloudPC.app) tidak.
 
 ## Apa yang diubah dari Moonlight
 
@@ -22,6 +27,7 @@ Hanya merek. Logika streaming tidak disentuh.
 - Teks "Moonlight" di UI (`qsTr()` di QML, `tr()` di C++); teks log TIDAK diubah, karena aplikasi CloudPC
   membaca log stream untuk statistik
 - Ikon
+- macOS: nama di Dock/menu bar (`CFBundleName`), ID bundel `id.cloudpc.stream`, teks izin jaringan lokal
 - Cek update otomatis dimatikan (tombolnya mengarah ke unduhan Moonlight resmi)
 - `Moonlight.exe` diganti nama menjadi `CloudPCStream.exe` setelah build
 
