@@ -26,7 +26,8 @@ jobs:
       - id: brand
         run: |
           tag=$(python3 -c "import json; print(json.load(open('branding.json'))['upstream_tag'])")
-          if [ "${{ github.ref_type }}" = "tag" ]; then rel="${{ github.ref_name }}"; else rel="cloudpc-$tag-r${{ github.run_number }}"; fi
+          # Tanggal + nomor build: unik walau nomor build di-reset (misalnya file workflow diganti nama).
+          if [ "${{ github.ref_type }}" = "tag" ]; then rel="${{ github.ref_name }}"; else rel="cloudpc-$tag-$(date -u +%Y%m%d)-r${{ github.run_number }}"; fi
           echo "tag=$tag" >> "$GITHUB_OUTPUT"
           echo "release=$rel" >> "$GITHUB_OUTPUT"
 
