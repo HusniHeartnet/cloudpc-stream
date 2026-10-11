@@ -1,0 +1,9 @@
+{
+  "upstream_repo": "https://github.com/moonlight-stream/moonlight-qt",
+  "upstream_tag": "v6.2.0",
+  "product": "CloudPC",
+  "company": "CloudPC",
+  "domain": "cloudpc.local",
+  "description": "CloudPC Stream",
+  "exe_name": "CloudPCStream.exe"
+}

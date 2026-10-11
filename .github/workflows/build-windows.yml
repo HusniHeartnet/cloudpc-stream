@@ -1,0 +1,113 @@
+# Build CloudPC Stream (moonlight-qt yang diganti mereknya) untuk Windows x64.
+# Langkah build Qt/MSVC disalin dari workflow resmi upstream (.github/workflows/build-win-mac.yml di tag yang sama);
+# kalau upstream_tag di branding.json dinaikkan, samakan versi Qt dan aqtsource dengan workflow upstream tag itu.
+# Hasil: GitHub Release berisi zip aplikasi + zip source lengkap (kewajiban GPLv3), juga sebagai artifact.
+name: Build CloudPC Stream (Windows)
+
+on:
+  workflow_dispatch:
+  push:
+    tags: ['cloudpc-*']
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: windows-2025
+    env:
+      QT_VERSION: 6.12.0
+    steps:
+      - name: Ambil repo branding
+        uses: actions/checkout@v5
+        with:
+          path: branding
+
+      - name: Baca branding.json
+        id: brand
+        shell: pwsh
+        run: |
+          $b = Get-Content branding/branding.json -Raw | ConvertFrom-Json
+          $rel = if ('${{ github.ref_type }}' -eq 'tag') { '${{ github.ref_name }}' } else { "cloudpc-$($b.upstream_tag)-r${{ github.run_number }}" }
+          "tag=$($b.upstream_tag)" >> $env:GITHUB_OUTPUT
+          "exe=$($b.exe_name)" >> $env:GITHUB_OUTPUT
+          "release=$rel" >> $env:GITHUB_OUTPUT
+
+      - name: Ambil source moonlight-qt ${{ steps.brand.outputs.tag }}
+        uses: actions/checkout@v5
+        with:
+          repository: moonlight-stream/moonlight-qt
+          ref: ${{ steps.brand.outputs.tag }}
+          path: src
+          submodules: recursive
+          fetch-depth: 1
+
+      - name: Ganti merek
+        run: python branding/apply_branding.py src
+
+      - name: Arsip source (GPL)
+        shell: pwsh
+        run: |
+          $name = "CloudPCStream-src-${{ steps.brand.outputs.tag }}"
+          New-Item -ItemType Directory -Force out, "stage\$name" | Out-Null
+          robocopy src "stage\$name\moonlight-qt" /E /XD .git /XF .git /NFL /NDL /NJH /NJS
+          if ($LASTEXITCODE -ge 8) { throw "robocopy src gagal ($LASTEXITCODE)" }
+          robocopy branding "stage\$name\cloudpc-branding" /E /XD .git /XF .git /NFL /NDL /NJH /NJS
+          if ($LASTEXITCODE -ge 8) { throw "robocopy branding gagal ($LASTEXITCODE)" }
+          7z a "out\$name.zip" ".\stage\$name" | Out-Null
+          if ($LASTEXITCODE -ne 0) { throw "7z gagal" }
+          exit 0
+
+      - name: Unduh dependensi
+        working-directory: src
+        run: powershell ./setup-deps.ps1
+
+      - name: Pasang Qt
+        uses: jurplel/install-qt-action@v4
+        with:
+          cache: true
+          set-env: true
+          add-tools-to-path: true
+          tools: tools_qtcreator_gui
+          version: ${{ env.QT_VERSION }}
+          aqtsource: 'git+https://github.com/miurahr/aqtinstall.git@073e34d7c2ab4ae6961ed7cca690b3abd5ba5a7e'
+
+      - name: Build x64
+        working-directory: src
+        shell: cmd
+        env:
+          QT_PATH: ${{ runner.workspace }}\Qt\${{ env.QT_VERSION }}\msvc2022_64\bin
+        run: |
+          set "PATH=%QT_PATH%;%PATH%"
+          scripts\build-arch.bat Release x64
+
+      - name: Paketkan
+        shell: pwsh
+        run: |
+          $deploy = 'src\build\deploy-x64-release'
+          Rename-Item "$deploy\Moonlight.exe" '${{ steps.brand.outputs.exe }}'
+          Copy-Item src\LICENSE "$deploy\LICENSE.txt"
+          Copy-Item src\CLOUDPC_MODIFICATIONS.txt $deploy
+          @(
+            'Aplikasi ini perangkat lunak bebas berlisensi GNU GPL versi 3 (LICENSE.txt), berbasis Moonlight.'
+            'Source code lengkap versi ini (termasuk skrip build dan perubahan merek):'
+            '${{ github.server_url }}/${{ github.repository }}/releases/tag/${{ steps.brand.outputs.release }}'
+          ) | Set-Content "$deploy\SOURCE.txt" -Encoding UTF8
+          7z a 'out\CloudPCStream-x64-${{ steps.brand.outputs.tag }}.zip' ".\$deploy\*" | Out-Null
+          if ($LASTEXITCODE -ne 0) { throw "7z gagal" }
+
+      - name: Simpan artifact
+        uses: actions/upload-artifact@v6
+        with:
+          name: CloudPCStream-${{ steps.brand.outputs.release }}
+          path: out/*.zip
+          if-no-files-found: error
+
+      - name: Buat GitHub Release
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release create '${{ steps.brand.outputs.release }}' (Get-ChildItem out\*.zip).FullName `
+            --repo '${{ github.repository }}' --title 'CloudPC Stream ${{ steps.brand.outputs.release }}' `
+            --notes 'Berbasis moonlight-qt ${{ steps.brand.outputs.tag }} (GPLv3). Zip src = source lengkap untuk build ini.'
